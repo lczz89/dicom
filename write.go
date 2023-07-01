@@ -7,8 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
 
 	"github.com/suyashkumar/dicom/pkg/vrraw"
+	"golang.org/x/text/encoding/simplifiedchinese"
+	"golang.org/x/text/transform"
 
 	"github.com/suyashkumar/dicom/pkg/uid"
 
@@ -44,6 +47,50 @@ func NewWriter(out io.Writer, opts ...WriteOption) *Writer {
 		optSet: optSet,
 	}
 }
+func NewBytesWriterWithTransferSyntax(out io.Writer, transferSyntaxUID string, opts ...WriteOption) *Writer {
+	optSet := toWriteOptSet(opts...)
+	endian, implicit, err := uid.ParseTransferSyntaxUID(transferSyntaxUID)
+	if err == nil {
+		//return NewWriter(, endian, implicit)
+		w := dicomio.NewWriter(out, endian, implicit)
+		return &Writer{
+			writer: w,
+			optSet: optSet,
+		}
+	}
+	e := dicomio.NewWriter(out, binary.LittleEndian, false)
+	fmt.Sprintln("%v: Unknown transfer syntax uid", transferSyntaxUID)
+	return &Writer{
+		writer: e,
+		optSet: optSet,
+	}
+}
+
+//	func NewBytesReaderWithTransferSyntax(out io.Writer, transferSyntaxUID string, opts ...WriteOption) *Writer {
+//		optSet := toWriteOptSet(opts...)
+//		endian, implicit, err := uid.ParseTransferSyntaxUID(transferSyntaxUID)
+//		if err == nil {
+//			w := dicomio.NewWriter(out, endian, implicit)
+//			return &Writer{
+//				writer: w,
+//				optSet: optSet,
+//			}
+//		}
+//		e := dicomio.NewWriter(out, binary.LittleEndian, false)
+//		fmt.Sprintln("%v: Unknown transfer syntax uid", transferSyntaxUID)
+//		return &Writer{
+//			writer: e,
+//			optSet: optSet,
+//		}
+//	}
+func NewCWriter(w *dicomio.Writer, opts ...WriteOption) *Writer {
+	optSet := toWriteOptSet(opts...)
+
+	return &Writer{
+		writer: *w,
+		optSet: optSet,
+	}
+}
 
 // SetTransferSyntax sets the transfer syntax for the underlying dicomio.Writer.
 func (w *Writer) SetTransferSyntax(bo binary.ByteOrder, implicit bool) {
@@ -54,6 +101,9 @@ func (w *Writer) SetTransferSyntax(bo binary.ByteOrder, implicit bool) {
 func (w *Writer) writeDataset(ds Dataset) error {
 	var metaElems []*Element
 	for _, elem := range ds.Elements {
+		if elem == nil {
+			continue
+		}
 		if elem.Tag.Group == tag.MetadataGroup {
 			metaElems = append(metaElems, elem)
 		}
@@ -456,13 +506,35 @@ func writeValue(w dicomio.Writer, t tag.Tag, value Value, valueType ValueType, v
 	}
 }
 
+// GBK 转 UTF-8
+func GbkToUtf8(s []byte) ([]byte, error) {
+	reader := transform.NewReader(bytes.NewReader(s), simplifiedchinese.GBK.NewDecoder())
+	d, e := ioutil.ReadAll(reader)
+	if e != nil {
+		return nil, e
+	}
+	return d, nil
+}
+
+// UTF-8 转 GBK
+func Utf8ToGbk(s []byte) ([]byte, error) {
+	reader := transform.NewReader(bytes.NewReader(s), simplifiedchinese.GBK.NewEncoder())
+	d, e := ioutil.ReadAll(reader)
+	if e != nil {
+		return nil, e
+	}
+	return d, nil
+}
+
 func writeStrings(w dicomio.Writer, values []string, vr string) error {
 	s := ""
 	for i, substr := range values {
 		if i > 0 {
 			s += "\\"
 		}
-		s += substr
+		//bytes utf8 中文处理
+		substrs, _ := Utf8ToGbk([]byte(substr))
+		s += string(substrs)
 	}
 	if err := w.WriteString(s); err != nil {
 		return err

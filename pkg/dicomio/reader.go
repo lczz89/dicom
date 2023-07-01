@@ -2,6 +2,7 @@ package dicomio
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"math"
 
 	"github.com/suyashkumar/dicom/pkg/charset"
+	"github.com/suyashkumar/dicom/pkg/uid"
 	"golang.org/x/text/encoding"
 )
 
@@ -20,13 +22,20 @@ var (
 	ErrorInsufficientBytesLeft = errors.New("not enough bytes left until buffer limit to complete this operation")
 )
 
+type IsImplicitVR int
+
 // LimitReadUntilEOF is a special dicomio.Reader limit indicating that there is no hard limit and the
-// Reader should read until EOF. 
+// Reader should read until EOF.
 const LimitReadUntilEOF = -9999
+const ImplicitVR IsImplicitVR = iota
 
 // Reader provides common functionality for reading underlying DICOM data.
 type Reader interface {
 	io.Reader
+
+	ReadByte() byte
+
+	ReadBytes(int) []byte
 	// ReadUInt8 reads a uint16 from the underlying reader.
 	ReadUInt8() (uint8, error)
 	// ReadUInt16 reads a uint16 from the underlying reader.
@@ -66,6 +75,7 @@ type Reader interface {
 	// SetTransferSyntax sets the byte order and whether the current transfer
 	// syntax is implicit or not.
 	SetTransferSyntax(bo binary.ByteOrder, implicit bool)
+	GetTransferSyntax() (bo binary.ByteOrder, implicit bool)
 	// IsImplicit returns if the currently set transfer syntax on this Reader is
 	// implicit or not.
 	IsImplicit() bool
@@ -73,6 +83,8 @@ type Reader interface {
 	// is called.
 	SetCodingSystem(cs charset.CodingSystem)
 	ByteOrder() binary.ByteOrder
+	EOF() bool
+	Error() error
 }
 
 type reader struct {
@@ -80,12 +92,13 @@ type reader struct {
 	bo         binary.ByteOrder
 	implicit   bool
 	limit      int64
-	bytesRead  int64
+	bytesRead  int64 //pos
 	limitStack []int64
 	// cs represents the CodingSystem to use when reading the string. If a
 	// particular encoding.Decoder within this CodingSystem is nil, assume
 	// ASCII.
-	cs charset.CodingSystem
+	cs  charset.CodingSystem
+	err error
 }
 
 // NewReader creates and returns a new dicomio.Reader.
@@ -97,7 +110,20 @@ func NewReader(in *bufio.Reader, bo binary.ByteOrder, limit int64) Reader {
 		bytesRead: 0,
 	}
 }
-
+func NewBytesReaderWithTransferSyntax(data []byte, transferSyntaxUID string) Reader {
+	endian, implicit, err := uid.ParseTransferSyntaxUID(transferSyntaxUID)
+	newdata := bytes.NewBuffer(data)
+	if err == nil {
+		reader := NewReader(bufio.NewReader(newdata), endian, math.MaxInt64)
+		reader.SetTransferSyntax(endian, implicit)
+		return reader
+	}
+	e := NewReader(bufio.NewReader(newdata), binary.LittleEndian, math.MaxInt64)
+	e.SetTransferSyntax(binary.LittleEndian, false)
+	fmt.Sprintln("%v: Unknown transfer syntax uid", transferSyntaxUID)
+	return e
+}
+func (r *reader) Error() error { return r.err }
 func (r *reader) BytesLeftUntilLimit() int64 {
 	if r.limit == LimitReadUntilEOF {
 		return math.MaxInt64
@@ -125,7 +151,14 @@ func (r *reader) Read(p []byte) (int, error) {
 	}
 	return n, err
 }
-
+func (r *reader) ReadByte() byte {
+	var out byte
+	err := binary.Read(r, r.bo, &out)
+	if err != nil {
+		return 0
+	}
+	return out
+}
 func (r *reader) ReadUInt8() (uint8, error) {
 	var out uint8
 	err := binary.Read(r, r.bo, &out)
@@ -191,6 +224,28 @@ func (r *reader) ReadString(n uint32) (string, error) {
 	}
 	return internalReadString(data, r.cs.Ideographic)
 }
+
+func (r *reader) ReadBytes(length int) []byte {
+	if r.limit-r.bytesRead < int64(length) {
+		//r.SetError(fmt.Errorf("ReadBytes: requested %d, available %d", length, r.len()))
+		return nil
+	}
+	v := make([]byte, length)
+	remaining := v
+	for len(remaining) > 0 {
+		n, err := r.Read(remaining)
+		if err != nil {
+			//	r.SetError(err)
+			break
+		}
+		if n < 0 || n > len(remaining) {
+			panic(fmt.Sprintf("Remaining: %d %d", n, len(remaining)))
+		}
+		remaining = remaining[n:]
+	}
+	//doassert(r.err != nil || len(remaining) == 0)
+	return v
+}
 func (r *reader) Skip(n int64) error {
 	if r.BytesLeftUntilLimit() < n {
 		// not enough left to skip
@@ -247,4 +302,14 @@ func (r *reader) Peek(n int) ([]byte, error) {
 
 func (r *reader) ByteOrder() binary.ByteOrder {
 	return r.bo
+}
+func (r *reader) EOF() bool {
+	if r.BytesLeftUntilLimit() <= 0 {
+		return true
+	}
+	data, _ := r.in.Peek(1)
+	return len(data) == 0
+}
+func (r *reader) GetTransferSyntax() (binary.ByteOrder, bool) {
+	return r.bo, r.implicit
 }

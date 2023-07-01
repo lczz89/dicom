@@ -797,3 +797,63 @@ func (r *reader) readRawItem(shouldSkip bool) ([]byte, bool, error) {
 func (r *reader) moreToRead() bool {
 	return !r.rawReader.IsLimitExhausted()
 }
+
+type ReadOptions struct {
+	// DropPixelData will cause the parser to skip the PixelData element
+	// (bulk images) in ReadDataSet.
+	DropPixelData bool
+
+	// ReturnTags is a whitelist of tags to return.
+	ReturnTags []tag.Tag
+
+	// StopAtag defines a tag at which when read (or a tag with a greater
+	// value than it is read), the program will stop parsing the dicom file.
+	StopAtTag *tag.Tag
+}
+
+var endOfDataElement = &Element{Tag: tag.Tag{Group: 0x7fff, Element: 0x7fff}}
+
+func ReadElement(d *dicomio.Reader, options ReadOptions) (*Element, error) {
+	reader := &reader{
+		rawReader: *d,
+		//opts:      options,
+	}
+	group, _ := reader.rawReader.ReadUInt16()
+	element, _ := reader.rawReader.ReadUInt16()
+	readTag := tag.Tag{group, element}
+
+	if readTag == tag.PixelData && options.DropPixelData {
+		return endOfDataElement, nil
+	}
+	if options.StopAtTag != nil && readTag.Group >= options.StopAtTag.Group && readTag.Element >= options.StopAtTag.Element {
+		return endOfDataElement, nil
+	}
+	_, implicit := reader.rawReader.GetTransferSyntax()
+	if readTag.Group == tag.GroupSeqItem {
+		implicit = true
+	}
+	var vr string // Value Representation
+	var vl uint32 // Value Length
+	var err error
+	//如果是ImplicitVR
+	if implicit == true {
+		vr, err = reader.readVR(true, readTag)
+		if err != nil {
+			return nil, err
+		}
+		vl, _ = reader.rawReader.ReadUInt32()
+	} else {
+		//doassert(implicit == dicomio.ExplicitVR, implicit)
+
+		vr, _ = reader.rawReader.ReadString(2)
+		vl, _ = reader.readVL(false, readTag, vr)
+	}
+	seqElements := &Dataset{}
+	val, err := reader.readValue(readTag, vr, vl, implicit, seqElements, nil)
+	if err != nil {
+		log.Println("error reading value ", err)
+		return nil, err
+	}
+	d = &reader.rawReader
+	return &Element{Tag: readTag, ValueRepresentation: tag.GetVRKind(readTag, vr), RawValueRepresentation: vr, ValueLength: vl, Value: val}, nil
+}

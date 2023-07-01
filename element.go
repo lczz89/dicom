@@ -140,7 +140,61 @@ func NewElement(t tag.Tag, data interface{}) (*Element, error) {
 		Value:                  value,
 	}, nil
 }
-
+func NewElementWithTag(t tag.Tag, values ...interface{}) (*Element, error) {
+	tagInfo, err := tag.Find(t)
+	if err != nil {
+		return nil, err
+	}
+	e := Element{
+		Tag:                    t,
+		ValueRepresentation:    tag.GetVRKind(t, tagInfo.VR),
+		RawValueRepresentation: tagInfo.VR,
+		Value:                  nil,
+	}
+	vrKind := tag.GetVRKind(t, tagInfo.VR)
+	var vv Value
+	for _, v := range values {
+		var ok bool
+		switch vrKind {
+		case tag.VRBytes:
+			tagV, _ := v.(byte)
+			vv = &bytesValue{value: []byte{tagV}}
+		case tag.VRString:
+			tagV, _ := v.(string)
+			vv = &stringsValue{value: []string{tagV}}
+		case tag.VRDate:
+			tagV, _ := v.(string)
+			vv = &stringsValue{value: []string{tagV}}
+		case tag.VRUInt16List, tag.VRUInt32List, tag.VRInt16List, tag.VRInt32List, tag.VRTagList:
+			tagV, _ := v.(int)
+			vv = &intsValue{value: []int{tagV}}
+		case tag.VRSequence:
+			var subelem *Element
+			subelem, ok = v.(*Element)
+			if ok {
+				ok = (subelem.Tag == tag.Item)
+			}
+			vv = subelem.Value
+		case tag.VRItem:
+			tagV, _ := v.(*Element)
+			vv = tagV.Value
+		case tag.VRPixelData:
+			tagV, _ := v.(PixelDataInfo)
+			vv = &pixelDataValue{PixelDataInfo: tagV}
+		case tag.VRFloat32List, tag.VRFloat64List:
+			tagV, _ := v.(float64)
+			vv = &floatsValue{value: []float64{tagV}}
+		default:
+			tagV, _ := v.(string)
+			vv = &stringsValue{value: []string{tagV}}
+		}
+		if !ok {
+			return nil, fmt.Errorf("%v: wrong payload type for NewElement: expect %v, but found %v", tag.DebugString(t), vrKind, v)
+		}
+		e.Value = vv
+	}
+	return &e, nil
+}
 func mustNewElement(t tag.Tag, data interface{}) *Element {
 	elem, err := NewElement(t, data)
 	if err != nil {

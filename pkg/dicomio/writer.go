@@ -2,7 +2,10 @@ package dicomio
 
 import (
 	"encoding/binary"
+	"fmt"
 	"io"
+
+	"github.com/suyashkumar/dicom/pkg/uid"
 )
 
 // Writer is a lower level encoder that manages writing out entities to an
@@ -11,6 +14,7 @@ type Writer struct {
 	out      io.Writer
 	bo       binary.ByteOrder
 	implicit bool
+	err      error
 }
 
 // NewWriter initializes and returns a Writer.
@@ -21,6 +25,17 @@ func NewWriter(out io.Writer, bo binary.ByteOrder, implicit bool) Writer {
 		implicit: implicit,
 	}
 }
+func NewWriterWithTransferSyntax(out io.Writer, transferSyntaxUID string) Writer {
+	endian, implicit, err := uid.ParseTransferSyntaxUID(transferSyntaxUID)
+	if err == nil {
+		return NewWriter(out, endian, implicit)
+	}
+	e := NewWriter(out, binary.LittleEndian, false)
+	fmt.Sprintln("%v: Unknown transfer syntax uid", transferSyntaxUID)
+	return e
+}
+
+func (w *Writer) Error() error { return w.err }
 
 // SetTransferSyntax sets the current transfer syntax of this Writer.
 func (w *Writer) SetTransferSyntax(bo binary.ByteOrder, implicit bool) {

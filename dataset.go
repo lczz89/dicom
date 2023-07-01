@@ -226,3 +226,16 @@ func buildTabs(number uint) string {
 	}
 	return b.String()
 }
+
+func NewDataSet(mapV map[tag.Tag]interface{}) Dataset {
+	var elems Dataset
+
+	//elems := make([]*Element, len(mapV))
+	for tag, v := range mapV {
+		elems.Elements = append(elems.Elements, mustNewElement(tag, v))
+	}
+	// dd := Dataset{
+	// 	elems,
+	// }
+	return elems
+}
