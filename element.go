@@ -193,6 +193,9 @@ func NewElementWithTag(t tag.Tag, values ...interface{}) (*Element, error) {
 		}
 		e.Value = vv
 	}
+	if e.Value == nil {
+		e.Value = &stringsValue{value: []string{""}}
+	}
 	return &e, nil
 }
 func mustNewElement(t tag.Tag, data interface{}) *Element {

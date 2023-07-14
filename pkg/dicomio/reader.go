@@ -85,6 +85,7 @@ type Reader interface {
 	ByteOrder() binary.ByteOrder
 	EOF() bool
 	Error() error
+	Finish() error
 }
 
 type reader struct {
@@ -151,6 +152,16 @@ func (r *reader) Read(p []byte) (int, error) {
 	}
 	return n, err
 }
+func (r *reader) Finish() error {
+	if r.err != nil {
+		return r.err
+	}
+	if !r.EOF() {
+		return fmt.Errorf("Decoder found junk")
+	}
+	return nil
+}
+
 func (r *reader) ReadByte() byte {
 	var out byte
 	err := binary.Read(r, r.bo, &out)
@@ -251,10 +262,35 @@ func (r *reader) Skip(n int64) error {
 		// not enough left to skip
 		return ErrorInsufficientBytesLeft
 	}
-
+	// nd := int(n)
+	// junkSize := 1 << 16
+	// if nd < junkSize {
+	// 	junkSize = nd
+	// }
+	// junk := make([]byte, junkSize)
+	// remaining := nd
+	// for remaining > 0 {
+	// 	tmpLength := len(junk)
+	// 	if remaining < tmpLength {
+	// 		tmpLength = remaining
+	// 	}
+	// 	tmpBuf := junk[:tmpLength]
+	// 	n, err := r.Read(tmpBuf)
+	// 	if err != nil {
+	// 		//r.SetError(err)
+	// 		return err
+	// 	}
+	// 	doassert(n > 0)
+	// 	remaining -= n
+	// }
+	//doassert(remaining == 0)
 	_, err := io.CopyN(ioutil.Discard, r, n)
-
 	return err
+}
+func doassert(x bool) {
+	if !x {
+		panic("doassert")
+	}
 }
 
 // PushLimit creates a limit n bytes from the current position
@@ -307,7 +343,8 @@ func (r *reader) EOF() bool {
 	if r.BytesLeftUntilLimit() <= 0 {
 		return true
 	}
-	data, _ := r.in.Peek(1)
+	data, err := r.in.Peek(1)
+	fmt.Println(err)
 	return len(data) == 0
 }
 func (r *reader) GetTransferSyntax() (binary.ByteOrder, bool) {
